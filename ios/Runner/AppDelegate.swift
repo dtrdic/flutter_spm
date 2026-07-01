@@ -16,15 +16,16 @@ import Alamofire
 
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
 
-    guard let controller = engineBridge.pluginRegistry
-      .registrar(forPlugin: "spm_test")
-      .viewController as? FlutterViewController else {
+    guard
+      let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "spm_test"),
+      let controller = registrar.messenger as? FlutterBinaryMessenger
+    else {
       return
     }
 
     let channel = FlutterMethodChannel(
       name: "spm_test",
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: controller
     )
 
     channel.setMethodCallHandler { call, result in
