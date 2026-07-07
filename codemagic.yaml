@@ -48,6 +48,7 @@ workflows:
             
             echo "── Running TestFlight Auto-Configuration ──"
             python3 configure_testflight.py
+
       artifacts:
         - $CM_BUILD_DIR/full_build.log
         - build/ios/iphonesimulator/Runner.app
@@ -65,6 +66,6 @@ workflows:
             failure: false # To not receive a notification when a build fails
         app_store_connect:
           auth: integration
-          submit_to_testflight: true
-          submit_to_app_store: true
+          # submit_to_testflight: true
+          # submit_to_app_store: true
 
