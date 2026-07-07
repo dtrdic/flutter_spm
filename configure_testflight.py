@@ -238,7 +238,7 @@ def main():
     info_patch = requests.patch(f"{BASE_URL}/appInfos/{info_id}", json=info_payload, headers=headers)
     check_response(info_patch, "Patching Categories and App Info")
 
-    # 10. Screenshot Orchestration
+    # 10. Screenshot Orchestration (UPDATED: Added Auto-Purge to prevent accumulation/duplicates)
     base_screenshots_dir = "app-store/screenshots"
     if os.path.exists(base_screenshots_dir):
         print("── Orchestrating App Store Screenshot Uploads ──")
@@ -258,6 +258,15 @@ def main():
                 create_set_res = requests.post(f"{BASE_URL}/appScreenshotSets", json={"data": {"type": "appScreenshotSets", "attributes": {"screenshotDisplayType": display_type}, "relationships": {"appStoreVersionLocalization": {"data": {"type": "appStoreVersionLocalizations", "id": localization_id}}}}}, headers=headers)
                 check_response(create_set_res, f"Creating set container for {display_type}")
                 set_id = create_set_res.json()['data']['id']
+            else:
+                # Purge historical screenshots from the layout group so we always cleanly mirror the repository assets
+                print(f"  Cleaning historical assets from existing slot: {display_type}...")
+                existing_shots_res = requests.get(f"{BASE_URL}/appScreenshotSets/{set_id}/appScreenshots", headers=headers)
+                check_response(existing_shots_res, f"Reading existing images in set {display_type}")
+                for shot in existing_shots_res.json().get('data', []):
+                    shot_id = shot['id']
+                    del_res = requests.delete(f"{BASE_URL}/appScreenshots/{shot_id}", headers=headers)
+                    check_response(del_res, f"Removing duplicate screenshot asset {shot_id}")
 
             print(f" Processing folder: {display_type}")
             for file_name in sorted(os.listdir(display_path)):
