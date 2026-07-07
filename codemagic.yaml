@@ -1,0 +1,70 @@
+workflows:
+
+
+    ios-workflow:
+      name: iOS Workflow
+      max_build_duration: 120
+      instance_type: mac_mini_m4
+      integrations:
+        app_store_connect: DavidAPIkey
+      cache:
+        cache_paths:
+          - ~/Library/Developer/Xcode/DerivedData/CompilationCache.noindex
+      environment:
+        xcode: 26.6
+        groups:
+            - appstore_credentials 
+        vars:
+          BUNDLE_ID: com.codemagic.flutterSpm 
+      triggering:
+        events:
+          - push
+
+      scripts:
+        - name: Automatic code signing
+          script: | 
+            keychain initialize
+            app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+            keychain add-certificates
+            xcode-project use-profiles
+        - name: Get Flutter packages
+          script: |
+            flutter packages pub get
+        - name: versioning
+          script: |
+            LATEST_BUILD_NUMBER=$(($(app-store-connect get-latest-app-store-build-number "$APP_ID") + 1))
+            cd ./ios
+            agvtool new-version -all $(($BUILD_NUMBER))
+            agvtool new-marketing-version 1.0.$(($BUILD_NUMBER))
+
+        - name: Flutter build ipa and automatic versioning
+          script: |
+            flutter build ipa --release \
+              --export-options-plist=/Users/builder/export_options.plist 
+        - name: Configure TestFlight Beta Information
+          script: |
+            echo "── Installing script requirements ──"
+            pip3 install PyJWT cryptography requests
+            
+            echo "── Running TestFlight Auto-Configuration ──"
+            python3 configure_testflight.py
+      artifacts:
+        - $CM_BUILD_DIR/full_build.log
+        - build/ios/iphonesimulator/Runner.app
+        - /tmp/xcodebuild_logs/*.log
+        - /tmp/xcodebuild_logs/iosApp.log
+        - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
+        - /Users/builder/clone/build/ios/ipa/*.ipa
+        - flutter_drive.log
+      publishing:
+        email:
+          recipients:
+            - david@nevercode.io
+          notify:
+            success: true # To receive a notification when a build succeeds
+            failure: false # To not receive a notification when a build fails
+        app_store_connect:
+          auth: integration
+          submit_to_testflight: true
+          submit_to_app_store: true
+

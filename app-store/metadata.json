@@ -1,0 +1,60 @@
+{
+  "beta_review_info": {
+    "contactFirstName": "david",
+    "contactLastName": "trdic",
+    "contactEmail": "david@nevercode.io",
+    "contactPhone": "+385 98 929 5183", 
+    "demoAccountRequired": false
+  },
+  "production_review_info": {
+    "contactFirstName": "david",
+    "contactLastName": "trdic",
+    "contactEmail": "david@nevercode.io",
+    "contactPhone": "+385 98 929 5183", 
+    "demoAccountRequired": false,
+    "notes": "Automated deployment verification build via Codemagic CI/CD."
+  },
+  "beta_localization": {
+    "feedbackEmail": "david@nevercode.io",
+    "description": "Beta testing version of FlutterSPM application."
+  },
+  "version_attributes": {
+    "copyright": "2026 Nevercode"
+  },
+  "store_localization": {
+    "description": "FlutterSPM is a powerful, production-ready utility application designed for seamless workspace management.",
+    "keywords": "utility, productivity, flutter, codemagic",
+    "supportUrl": "https://nevercode.io/support"
+  },
+  "app_info_localization": {
+    "privacyPolicyUrl": "https://nevercode.io/privacy"
+  },
+  "app_info_attributes": {},
+  "categories": {
+    "primaryCategory": "UTILITIES"
+  },
+  "age_rating": {
+    "alcoholTobaccoOrDrugUseOrReferences": "NONE",
+    "gamblingSimulated": "NONE",
+    "gambling": false,
+    "horrorOrFearThemes": "NONE",
+    "matureOrSuggestiveThemes": "NONE",
+    "profanityOrCrudeHumor": "NONE",
+    "sexualContentGraphicAndNudity": "NONE",
+    "sexualContentOrNudity": "NONE",
+    "violenceCartoonOrFantasy": "NONE",
+    "violenceRealistic": "NONE",
+    "violenceRealisticProlongedGraphicOrSadistic": "NONE",
+    "medicalOrTreatmentInformation": "NONE",
+    "unrestrictedWebAccess": false,
+    "messagingAndChat": false,
+    "userGeneratedContent": false,
+    "contests": "NONE",
+    "healthOrWellnessTopics": false,
+    "gunsOrOtherWeapons": "NONE",
+    "parentalControls": false,
+    "advertising": false,
+    "ageAssurance": false,
+    "lootBox": false
+  }
+}
