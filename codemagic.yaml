@@ -11,7 +11,7 @@ workflows:
         cache_paths:
           - ~/Library/Developer/Xcode/DerivedData/CompilationCache.noindex
       environment:
-        xcode: 26.5
+        xcode: 26.4
         groups:
             - appstore_credentials 
         vars:
