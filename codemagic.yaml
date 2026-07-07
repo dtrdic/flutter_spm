@@ -68,4 +68,5 @@ workflows:
           auth: integration
           # submit_to_testflight: true
           submit_to_app_store: true
+          expire_build_submitted_for_review: true
 

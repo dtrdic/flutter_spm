@@ -88,23 +88,24 @@ def main():
     app_id = app_res.json()['data'][0]['id']
     primary_locale = app_res.json()['data'][0]['attributes']['primaryLocale']
     
-    # FETCH ALL VERSIONS TO EVALUATE THE LIFECYCLE STATE MATRIX
     version_res = requests.get(f"{BASE_URL}/apps/{app_id}/appStoreVersions", headers=headers)
     check_response(version_res, "Fetching App Store Versions Collection")
     versions_data = version_res.json().get('data', [])
     
+    # EDITABLE STATES MATRIX (Includes rejected states so cleanup always runs)
+    EDITABLE_STATES = ['PREPARE_FOR_SUBMISSION', 'DEVELOPER_REJECTED', 'REJECTED']
+    
     target_version = None
     for v in versions_data:
-        if v['attributes']['appStoreState'] == 'PREPARE_FOR_SUBMISSION':
+        if v['attributes']['appStoreState'] in EDITABLE_STATES:
             target_version = v
             break
             
-    # FIXED: If the version is locked in review, exit gracefully with code 0 instead of breaking the build loop
     if not target_version:
         current_states = [v['attributes']['appStoreState'] for v in versions_data]
-        print(f"ℹ No version currently in editable 'PREPARE_FOR_SUBMISSION' state.")
+        print(f"ℹ No version found in editable states: {EDITABLE_STATES}")
         print(f"ℹ Live database version states: {current_states}")
-        print("✓ The latest app release version is already locked and processing inside Apple's review queue.")
+        print("✓ Version is locked in review. Skipping update orchestration.")
         print("═══════════════════════════════════════════════════════")
         print(" ✓ Global App Store Connect automated configuration complete! (Skipped)")
         print("═══════════════════════════════════════════════════════")
@@ -115,7 +116,7 @@ def main():
     check_response(info_res, "Fetching App Info Collection")
     info_id = info_res.json()['data'][0]['id']
     
-    print(f"✓ Target Version ID: {version_id}")
+    print(f"✓ Target Version ID: {version_id} (State: {target_version['attributes']['appStoreState']})")
     print(f"✓ Target App Info ID: {info_id} (Locale: {primary_locale})")
 
     # 1. Declaring App Content Rights
