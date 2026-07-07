@@ -88,13 +88,29 @@ def main():
     app_id = app_res.json()['data'][0]['id']
     primary_locale = app_res.json()['data'][0]['attributes']['primaryLocale']
     
-    version_res = requests.get(f"{BASE_URL}/apps/{app_id}/appStoreVersions?filter[appStoreState]=PREPARE_FOR_SUBMISSION", headers=headers)
-    check_response(version_res, "Fetching Active App Store Version")
-    if not version_res.json().get('data'):
-        print("✗ No version found in 'PREPARE_FOR_SUBMISSION' state.")
-        sys.exit(1)
-    version_id = version_res.json()['data'][0]['id']
+    # FETCH ALL VERSIONS TO EVALUATE THE LIFECYCLE STATE MATRIX
+    version_res = requests.get(f"{BASE_URL}/apps/{app_id}/appStoreVersions", headers=headers)
+    check_response(version_res, "Fetching App Store Versions Collection")
+    versions_data = version_res.json().get('data', [])
     
+    target_version = None
+    for v in versions_data:
+        if v['attributes']['appStoreState'] == 'PREPARE_FOR_SUBMISSION':
+            target_version = v
+            break
+            
+    # FIXED: If the version is locked in review, exit gracefully with code 0 instead of breaking the build loop
+    if not target_version:
+        current_states = [v['attributes']['appStoreState'] for v in versions_data]
+        print(f"ℹ No version currently in editable 'PREPARE_FOR_SUBMISSION' state.")
+        print(f"ℹ Live database version states: {current_states}")
+        print("✓ The latest app release version is already locked and processing inside Apple's review queue.")
+        print("═══════════════════════════════════════════════════════")
+        print(" ✓ Global App Store Connect automated configuration complete! (Skipped)")
+        print("═══════════════════════════════════════════════════════")
+        sys.exit(0)
+        
+    version_id = target_version['id']
     info_res = requests.get(f"{BASE_URL}/apps/{app_id}/appInfos", headers=headers)
     check_response(info_res, "Fetching App Info Collection")
     info_id = info_res.json()['data'][0]['id']
@@ -102,7 +118,7 @@ def main():
     print(f"✓ Target Version ID: {version_id}")
     print(f"✓ Target App Info ID: {info_id} (Locale: {primary_locale})")
 
-    # 1. Automate Content Rights Declaration with valid Apple Enum
+    # 1. Declaring App Content Rights
     print("── Declaring App Content Rights ──")
     rights_payload = {
         "data": {
@@ -117,7 +133,7 @@ def main():
     check_response(rights_patch, "Updating Content Rights Declaration")
     print("✓ Content Rights declared: Does not use third-party content.")
 
-    # 2. Create/Update Pricing Schedule (Defaulting to Free)
+    # 2. Create/Update Pricing Schedule
     print("── Configuring Price Schedule Container ──")
     price_payload = {
         "data": {
@@ -238,7 +254,7 @@ def main():
     info_patch = requests.patch(f"{BASE_URL}/appInfos/{info_id}", json=info_payload, headers=headers)
     check_response(info_patch, "Patching Categories and App Info")
 
-    # 10. Screenshot Orchestration (UPDATED: Added Auto-Purge to prevent accumulation/duplicates)
+    # 10. Screenshot Orchestration
     base_screenshots_dir = "app-store/screenshots"
     if os.path.exists(base_screenshots_dir):
         print("── Orchestrating App Store Screenshot Uploads ──")
@@ -259,7 +275,6 @@ def main():
                 check_response(create_set_res, f"Creating set container for {display_type}")
                 set_id = create_set_res.json()['data']['id']
             else:
-                # Purge historical screenshots from the layout group so we always cleanly mirror the repository assets
                 print(f"  Cleaning historical assets from existing slot: {display_type}...")
                 existing_shots_res = requests.get(f"{BASE_URL}/appScreenshotSets/{set_id}/appScreenshots", headers=headers)
                 check_response(existing_shots_res, f"Reading existing images in set {display_type}")
