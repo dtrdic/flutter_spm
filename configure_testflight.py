@@ -317,6 +317,10 @@ def main():
                 if file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
                     upload_screenshot_file(os.path.join(display_path, file_name), set_id, headers)
 
+    print("── Pausing for a 45-second cooling period ──")
+    print("ℹ Allowing Apple to finish image scaling and release resource locks...")
+    time.sleep(45)
+
     print("═══════════════════════════════════════════════════════")
     print(" ✓ Global App Store Connect automated configuration complete!")
     print("═══════════════════════════════════════════════════════")
