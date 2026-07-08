@@ -133,15 +133,19 @@ def main():
     check_response(rights_patch, "Updating Content Rights Declaration")
     print("✓ Content Rights declared: Does not use third-party content.")
 
-    # 2. Create/Update Pricing Schedule (UPDATED: Resolves Empty Shell 409 Flaw)
+    # 2. Create/Update Pricing Schedule (FIXED: Added explicit USA base territory filtering)
     print("── Configuring Price Schedule Container ──")
-    pts_res = requests.get(f"{BASE_URL}/apps/{app_id}/appPricePoints?limit=100", headers=headers)
-    check_response(pts_res, "Fetching App Price Points")
+    pts_res = requests.get(f"{BASE_URL}/apps/{app_id}/appPricePoints?filter[territory]=USA&limit=50", headers=headers)
+    check_response(pts_res, "Fetching Territory App Price Points")
     free_point_id = None
     for pt in pts_res.json().get('data', []):
-        if pt['attributes'].get('customerPrice') == "0.00":
-            free_point_id = pt['id']
-            break
+        price_str = pt['attributes'].get('customerPrice', '').replace(',', '.')
+        try:
+            if float(price_str) == 0.0:
+                free_point_id = pt['id']
+                break
+        except ValueError:
+            pass
 
     if free_point_id:
         placeholder_id = f"new-price-{int(time.time())}"
@@ -186,7 +190,7 @@ def main():
             check_response(price_res, "Initializing App Price Schedule")
             print("✓ App pricing schedule successfully initialized to Free.")
     else:
-        print("✗ Could not locate a valid Free (0.00) price point from Apple's database.")
+        print("✗ Could not locate a valid Free (0.00) price point tier using base territory schema.")
         sys.exit(1)
 
     # 3. TestFlight Beta Settings Updates
