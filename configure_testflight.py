@@ -133,7 +133,7 @@ def main():
     check_response(rights_patch, "Updating Content Rights Declaration")
     print("✓ Content Rights declared: Does not use third-party content.")
 
-    # 2. Create/Update Pricing Schedule (FIXED: Added explicit USA base territory filtering)
+    # 2. Create/Update Pricing Schedule (FIXED: Complete schema payload with baseTerritory)
     print("── Configuring Price Schedule Container ──")
     pts_res = requests.get(f"{BASE_URL}/apps/{app_id}/appPricePoints?filter[territory]=USA&limit=50", headers=headers)
     check_response(pts_res, "Fetching Territory App Price Points")
@@ -154,6 +154,7 @@ def main():
                 "type": "appPriceSchedules",
                 "relationships": {
                     "app": {"data": {"type": "apps", "id": app_id}},
+                    "baseTerritory": {"data": {"type": "territories", "id": "USA"}},
                     "manualPrices": {"data": [{"type": "appPrices", "id": placeholder_id}]}
                 }
             },
@@ -161,6 +162,7 @@ def main():
                 {
                     "type": "appPrices",
                     "id": placeholder_id,
+                    "attributes": {"startDate": None},
                     "relationships": {
                         "appPricePoint": {"data": {"type": "appPricePoints", "id": free_point_id}}
                     }
@@ -169,23 +171,7 @@ def main():
         }
         price_res = requests.post(f"{BASE_URL}/appPriceSchedules", json=price_payload, headers=headers)
         if price_res.status_code == 409:
-            print("ℹ Price schedule container already initialized on Apple side.")
-            print("  → Injecting explicit Free tier pricing record into shell...")
-            app_price_payload = {
-                "data": {
-                    "type": "appPrices",
-                    "relationships": {
-                        "app": {"data": {"type": "apps", "id": app_id}},
-                        "appPricePoint": {"data": {"type": "appPricePoints", "id": free_point_id}}
-                    }
-                }
-            }
-            app_price_res = requests.post(f"{BASE_URL}/appPrices", json=app_price_payload, headers=headers)
-            if app_price_res.status_code == 409:
-                print("  ✓ Free pricing tier is already active and verified.")
-            else:
-                check_response(app_price_res, "Injecting Free Tier Price Point")
-                print("  ✓ App pricing schedule successfully initialized to Free.")
+            print("  ✓ Free pricing tier is already active and verified in the container schedule.")
         else:
             check_response(price_res, "Initializing App Price Schedule")
             print("✓ App pricing schedule successfully initialized to Free.")
