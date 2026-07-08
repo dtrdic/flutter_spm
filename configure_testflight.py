@@ -92,7 +92,6 @@ def main():
     check_response(version_res, "Fetching App Store Versions Collection")
     versions_data = version_res.json().get('data', [])
     
-    # EDITABLE STATES MATRIX (Includes rejected states so cleanup always runs)
     EDITABLE_STATES = ['PREPARE_FOR_SUBMISSION', 'DEVELOPER_REJECTED', 'REJECTED']
     
     target_version = None
@@ -134,22 +133,51 @@ def main():
     check_response(rights_patch, "Updating Content Rights Declaration")
     print("✓ Content Rights declared: Does not use third-party content.")
 
-    # 2. Create/Update Pricing Schedule
+    # 2. Create/Update Pricing Schedule (FIXED: Standardized Apple relationship token layout)
     print("── Configuring Price Schedule Container ──")
-    price_payload = {
-        "data": {
-            "type": "appPriceSchedules",
-            "relationships": {
-                "app": {"data": {"type": "apps", "id": app_id}}
-            }
+    pts_res = requests.get(f"{BASE_URL}/apps/{app_id}/appPricePoints?filter[territory]=USA&limit=50", headers=headers)
+    check_response(pts_res, "Fetching Territory App Price Points")
+    free_point_id = None
+    for pt in pts_res.json().get('data', []):
+        price_str = pt['attributes'].get('customerPrice', '').replace(',', '.')
+        try:
+            if float(price_str) == 0.0:
+                free_point_id = pt['id']
+                break
+        except ValueError:
+            pass
+
+    if free_point_id:
+        local_token_id = "${newprice-0}"  # 👈 MUST match Apple's expected syntax pattern
+        price_payload = {
+            "data": {
+                "type": "appPriceSchedules",
+                "relationships": {
+                    "app": {"data": {"type": "apps", "id": app_id}},
+                    "baseTerritory": {"data": {"type": "territories", "id": "USA"}},
+                    "manualPrices": {"data": [{"type": "appPrices", "id": local_token_id}]}
+                }
+            },
+            "included": [
+                {
+                    "type": "appPrices",
+                    "id": local_token_id,
+                    "attributes": {"startDate": None},
+                    "relationships": {
+                        "appPricePoint": {"data": {"type": "appPricePoints", "id": free_point_id}}
+                    }
+                }
+            ]
         }
-    }
-    price_res = requests.post(f"{BASE_URL}/appPriceSchedules", json=price_payload, headers=headers)
-    if price_res.status_code == 409:
-        print("ℹ Price schedule already exists — skipping setup.")
+        price_res = requests.post(f"{BASE_URL}/appPriceSchedules", json=price_payload, headers=headers)
+        if price_res.status_code == 409:
+            print(f"ℹ Container notice (409). Raw payload state context: {price_res.text}")
+        else:
+            check_response(price_res, "Initializing App Price Schedule")
+            print("✓ App pricing schedule successfully initialized to Free.")
     else:
-        check_response(price_res, "Initializing App Price Schedule")
-        print("✓ App pricing schedule successfully initialized to Free.")
+        print("✗ Could not locate a valid Free (0.00) price point tier using base territory schema.")
+        sys.exit(1)
 
     # 3. TestFlight Beta Settings Updates
     print("── Updating Beta App Review Information ──")
@@ -288,6 +316,10 @@ def main():
             for file_name in sorted(os.listdir(display_path)):
                 if file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
                     upload_screenshot_file(os.path.join(display_path, file_name), set_id, headers)
+
+    print("── Pausing for a 45-second cooling period ──")
+    print("ℹ Allowing Apple to finish image scaling and release resource locks...")
+    time.sleep(45)
 
     print("═══════════════════════════════════════════════════════")
     print(" ✓ Global App Store Connect automated configuration complete!")
