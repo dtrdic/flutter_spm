@@ -92,7 +92,6 @@ def main():
     check_response(version_res, "Fetching App Store Versions Collection")
     versions_data = version_res.json().get('data', [])
     
-    # EDITABLE STATES MATRIX (Includes rejected states so cleanup always runs)
     EDITABLE_STATES = ['PREPARE_FOR_SUBMISSION', 'DEVELOPER_REJECTED', 'REJECTED']
     
     target_version = None
@@ -134,22 +133,61 @@ def main():
     check_response(rights_patch, "Updating Content Rights Declaration")
     print("✓ Content Rights declared: Does not use third-party content.")
 
-    # 2. Create/Update Pricing Schedule
+    # 2. Create/Update Pricing Schedule (UPDATED: Resolves Empty Shell 409 Flaw)
     print("── Configuring Price Schedule Container ──")
-    price_payload = {
-        "data": {
-            "type": "appPriceSchedules",
-            "relationships": {
-                "app": {"data": {"type": "apps", "id": app_id}}
-            }
+    pts_res = requests.get(f"{BASE_URL}/apps/{app_id}/appPricePoints?limit=100", headers=headers)
+    check_response(pts_res, "Fetching App Price Points")
+    free_point_id = None
+    for pt in pts_res.json().get('data', []):
+        if pt['attributes'].get('customerPrice') == "0.00":
+            free_point_id = pt['id']
+            break
+
+    if free_point_id:
+        placeholder_id = f"new-price-{int(time.time())}"
+        price_payload = {
+            "data": {
+                "type": "appPriceSchedules",
+                "relationships": {
+                    "app": {"data": {"type": "apps", "id": app_id}},
+                    "manualPrices": {"data": [{"type": "appPrices", "id": placeholder_id}]}
+                }
+            },
+            "included": [
+                {
+                    "type": "appPrices",
+                    "id": placeholder_id,
+                    "relationships": {
+                        "appPricePoint": {"data": {"type": "appPricePoints", "id": free_point_id}}
+                    }
+                }
+            ]
         }
-    }
-    price_res = requests.post(f"{BASE_URL}/appPriceSchedules", json=price_payload, headers=headers)
-    if price_res.status_code == 409:
-        print("ℹ Price schedule already exists — skipping setup.")
+        price_res = requests.post(f"{BASE_URL}/appPriceSchedules", json=price_payload, headers=headers)
+        if price_res.status_code == 409:
+            print("ℹ Price schedule container already initialized on Apple side.")
+            print("  → Injecting explicit Free tier pricing record into shell...")
+            app_price_payload = {
+                "data": {
+                    "type": "appPrices",
+                    "relationships": {
+                        "app": {"data": {"type": "apps", "id": app_id}},
+                        "appPricePoint": {"data": {"type": "appPricePoints", "id": free_point_id}}
+                    }
+                }
+            }
+            app_price_res = requests.post(f"{BASE_URL}/appPrices", json=app_price_payload, headers=headers)
+            if app_price_res.status_code == 409:
+                print("  ✓ Free pricing tier is already active and verified.")
+            else:
+                check_response(app_price_res, "Injecting Free Tier Price Point")
+                print("  ✓ App pricing schedule successfully initialized to Free.")
+        else:
+            check_response(price_res, "Initializing App Price Schedule")
+            print("✓ App pricing schedule successfully initialized to Free.")
     else:
-        check_response(price_res, "Initializing App Price Schedule")
-        print("✓ App pricing schedule successfully initialized to Free.")
+        print("✗ Could not locate a valid Free (0.00) price point from Apple's database.")
+        sys.exit(1)
 
     # 3. TestFlight Beta Settings Updates
     print("── Updating Beta App Review Information ──")
