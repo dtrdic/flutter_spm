@@ -12,6 +12,7 @@ workflows:
           - ~/Library/Developer/Xcode/DerivedData/CompilationCache.noindex
       environment:
         #flutter: 3.44.5
+        xcode: 26.6
         groups:
             - appstore_credentials 
         vars:
