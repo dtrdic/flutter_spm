@@ -228,8 +228,8 @@ def main():
                     if file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
                         upload_screenshot_file(os.path.join(display_path, file_name), set_id, headers)
 
-    print("\n── Pausing for a 45-second cooling period ──")
-    time.sleep(45)
+    print("\n── Pausing for a 15-second cooling period ──")
+    time.sleep(15)
     print("═══════════════════════════════════════════════════════")
     print(" ✓ Global App Store Connect automated configuration complete!")
     print("═══════════════════════════════════════════════════════")
