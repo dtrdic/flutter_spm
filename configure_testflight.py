@@ -110,37 +110,49 @@ def main():
     
     # Global Pricing
     pts_res = requests.get(f"{BASE_URL}/apps/{app_id}/appPricePoints?filter[territory]=USA&limit=50", headers=headers)
+    check_response(pts_res, "Fetching Base Pricing Reference Points")
     free_point_id = next((pt['id'] for pt in pts_res.json().get('data', []) if pt['attributes'].get('customerPrice', '').replace(',', '.') == "0.00"), None)
+    
     if free_point_id:
         local_token_id = "${newprice-0}"
         price_payload = {"data": {"type": "appPriceSchedules", "relationships": {"app": {"data": {"type": "apps", "id": app_id}}, "baseTerritory": {"data": {"type": "territories", "id": "USA"}}, "manualPrices": {"data": [{"type": "appPrices", "id": local_token_id}]}}}, "included": [{"type": "appPrices", "id": local_token_id, "attributes": {"startDate": None}, "relationships": {"appPricePoint": {"data": {"type": "appPricePoints", "id": free_point_id}}}}] }
-        requests.post(f"{BASE_URL}/appPriceSchedules", json=price_payload, headers=headers)
+        price_res = requests.post(f"{BASE_URL}/appPriceSchedules", json=price_payload, headers=headers)
+        if price_res.status_code != 409:
+            check_response(price_res, "Setting Global Pricing Tiers")
 
-    # Beta Detail & Production Reviews
+    # Beta Review Info Setup
     review_info_res = requests.get(f"{BASE_URL}/apps/{app_id}/betaAppReviewDetail", headers=headers)
-    requests.patch(f"{BASE_URL}/betaAppReviewDetails/{review_info_res.json()['data']['id']}", json={"data": {"id": review_info_res.json()['data']['id'], "type": "betaAppReviewDetails", "attributes": meta['global']['beta_review_info']}}, headers=headers)
+    check_response(review_info_res, "Fetching Beta App Review Base Container")
+    beta_patch = requests.patch(f"{BASE_URL}/betaAppReviewDetails/{review_info_res.json()['data']['id']}", json={"data": {"id": review_info_res.json()['data']['id'], "type": "betaAppReviewDetails", "attributes": meta['global']['beta_review_info']}}, headers=headers)
+    check_response(beta_patch, "Updating Beta App Review Properties")
     
+    # Production Review Info Setup
     prod_review_res = requests.get(f"{BASE_URL}/appStoreVersions/{version_id}/appStoreReviewDetail", headers=headers)
     if prod_review_res.status_code == 200 and prod_review_res.json().get('data'):
-        requests.patch(f"{BASE_URL}/appStoreReviewDetails/{prod_review_res.json()['data']['id']}", json={"data": {"id": prod_review_res.json()['data']['id'], "type": "appStoreReviewDetails", "attributes": meta['global']['production_review_info']}}, headers=headers)
+        prod_patch = requests.patch(f"{BASE_URL}/appStoreReviewDetails/{prod_review_res.json()['data']['id']}", json={"data": {"id": prod_review_res.json()['data']['id'], "type": "appStoreReviewDetails", "attributes": meta['global']['production_review_info']}}, headers=headers)
+        check_response(prod_patch, "Patching Production Review Fields")
     else:
-        requests.post(f"{BASE_URL}/appStoreReviewDetails", json={"data": {"type": "appStoreReviewDetails", "attributes": meta['global']['production_review_info'], "relationships": {"appStoreVersion": {"data": {"type": "appStoreVersions", "id": version_id}}}}}, headers=headers)
+        prod_post = requests.post(f"{BASE_URL}/appStoreReviewDetails", json={"data": {"type": "appStoreReviewDetails", "attributes": meta['global']['production_review_info'], "relationships": {"appStoreVersion": {"data": {"type": "appStoreVersions", "id": version_id}}}}}, headers=headers)
+        check_response(prod_post, "Initializing Production Review Container")
 
-    # Version Compliance (Copyright) & Age Ratings
-    requests.patch(f"{BASE_URL}/appStoreVersions/{version_id}", json={"data": {"id": version_id, "type": "appStoreVersions", "attributes": meta['global']['version_attributes']}}, headers=headers)
-    age_res = requests.get(f"{BASE_URL}/apps/{app_id}/appInfos/{info_id}/ageRatingDeclaration", headers=headers) if 'appInfos' not in f"{BASE_URL}/appInfos/{info_id}" else requests.get(f"{BASE_URL}/appInfos/{info_id}/ageRatingDeclaration", headers=headers)
-    if age_res.status_code != 200:
-        age_res = requests.get(f"{BASE_URL}/appInfos/{info_id}/ageRatingDeclaration", headers=headers)
-    requests.patch(f"{BASE_URL}/ageRatingDeclarations/{age_res.json()['data']['id']}", json={"data": {"id": age_res.json()['data']['id'], "type": "ageRatingDeclarations", "attributes": meta['global']['age_rating']}}, headers=headers)
+    # App Store Version Attributes (Copyright)
+    v_attr_res = requests.patch(f"{BASE_URL}/appStoreVersions/{version_id}", json={"data": {"id": version_id, "type": "appStoreVersions", "attributes": meta['global']['version_attributes']}}, headers=headers)
+    check_response(v_attr_res, "Updating Legal Copyright Fields")
+    
+    # Age Rating Survey Processing
+    age_res = requests.get(f"{BASE_URL}/appInfos/{info_id}/ageRatingDeclaration", headers=headers)
+    check_response(age_res, "Fetching Age Rating Declaration Container")
+    age_patch = requests.patch(f"{BASE_URL}/ageRatingDeclarations/{age_res.json()['data']['id']}", json={"data": {"id": age_res.json()['data']['id'], "type": "ageRatingDeclarations", "attributes": meta['global']['age_rating']}}, headers=headers)
+    check_response(age_patch, "Submitting Age Rating Declaration Questionnaire")
 
-    # Primary Category Setup
-    requests.patch(f"{BASE_URL}/appInfos/{info_id}", json={"data": {"id": info_id, "type": "appInfos", "relationships": {"primaryCategory": {"data": {"type": "appCategories", "id": meta['global']['categories']['primaryCategory']}}}}}, headers=headers)
+    # Primary Category Configuration
+    cat_res = requests.patch(f"{BASE_URL}/appInfos/{info_id}", json={"data": {"id": info_id, "type": "appInfos", "relationships": {"primaryCategory": {"data": {"type": "appCategories", "id": meta['global']['categories']['primaryCategory']}}}}}, headers=headers)
+    check_response(cat_res, "Setting Primary App Store Category")
 
     # --- 2. DYNAMIC MULTI-LANGUAGE ORCHESTRATION LOOP ---
     for locale, data in meta['localizations'].items():
         print(f"\n🌍 Processing Localization Loop for Target Locale: [{locale}] ──")
 
-        # Sync App Store Version Localization (Description, Keywords, Support URL)
         v_loc_res = requests.get(f"{BASE_URL}/appStoreVersions/{version_id}/appStoreVersionLocalizations?filter[locale]={locale}", headers=headers)
         check_response(v_loc_res, f"Fetching Version Localization for {locale}")
         v_loc_data = v_loc_res.json().get('data')
@@ -161,7 +173,6 @@ def main():
             check_response(v_post, f"Creating baseline Version Localization container for {locale}")
             v_loc_id = v_post.json()['data']['id']
 
-        # Sync Global App Info Localization (App Name, Subtitle, Privacy URL)
         info_loc_res = requests.get(f"{BASE_URL}/appInfos/{info_id}/appInfoLocalizations?filter[locale]={locale}", headers=headers)
         check_response(info_loc_res, f"Checking Info Localizations for {locale}")
         info_loc_data = info_loc_res.json().get('data')
@@ -176,23 +187,19 @@ def main():
             info_loc_id = info_loc_data[0]['id']
             info_res = requests.patch(f"{BASE_URL}/appInfoLocalizations/{info_loc_id}", json={"data": {"id": info_loc_id, "type": "appInfoLocalizations", "attributes": info_attributes}}, headers=headers)
             
-            # FIXED: If name validation blocks the object update, strip the branding and force save the privacy policy URL route
             if info_res.status_code == 409:
                 print(f"⚠️ App Name '{data.get('name')}' is locked or already in use. Isolating and force-saving Privacy Policy URL...")
-                fallback_attributes = {"privacyPolicyUrl": data.get("privacyPolicyUrl")}
-                info_res = requests.patch(f"{BASE_URL}/appInfoLocalizations/{info_loc_id}", json={"data": {"id": info_loc_id, "type": "appInfoLocalizations", "attributes": fallback_attributes}}, headers=headers)
+                info_res = requests.patch(f"{BASE_URL}/appInfoLocalizations/{info_loc_id}", json={"data": {"id": info_loc_id, "type": "appInfoLocalizations", "attributes": {"privacyPolicyUrl": data.get("privacyPolicyUrl")}}}, headers=headers)
             check_response(info_res, f"Syncing App Info details for {locale}")
         else:
             info_attributes["locale"] = locale
             info_res = requests.post(f"{BASE_URL}/appInfoLocalizations", json={"data": {"type": "appInfoLocalizations", "attributes": info_attributes, "relationships": {"appInfo": {"data": {"type": "appInfos", "id": info_id}}}}}, headers=headers)
             
             if info_res.status_code == 409:
-                print(f"⚠️ App Name target taken on creation block. Initializing tracking container via privacy compliance metrics fallback...")
-                fallback_attributes = {"locale": locale, "privacyPolicyUrl": data.get("privacyPolicyUrl")}
-                info_res = requests.post(f"{BASE_URL}/appInfoLocalizations", json={"data": {"type": "appInfoLocalizations", "attributes": fallback_attributes, "relationships": {"appInfo": {"data": {"type": "appInfos", "id": info_id}}}}}, headers=headers)
+                print(f"⚠️ App Name target taken on creation block. Initializing tracking container via privacy compliance fallback...")
+                info_res = requests.post(f"{BASE_URL}/appInfoLocalizations", json={"data": {"type": "appInfoLocalizations", "attributes": {"locale": locale, "privacyPolicyUrl": data.get("privacyPolicyUrl")}, "relationships": {"appInfo": {"data": {"type": "appInfos", "id": info_id}}}}}, headers=headers)
             check_response(info_res, f"Creating App Info data fields for {locale}")
 
-        # Sync Multi-Language Screenshots
         locale_screenshot_dir = f"app-store/screenshots/{locale}"
         if os.path.exists(locale_screenshot_dir):
             print(f" 📸 Processing screenshot folder patterns for [{locale}]...")
@@ -221,8 +228,8 @@ def main():
                     if file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
                         upload_screenshot_file(os.path.join(display_path, file_name), set_id, headers)
 
-    print("\n── Pausing for a 15-second cooling period ──")
-    time.sleep(15)
+    print("\n── Pausing for a 45-second cooling period ──")
+    time.sleep(45)
     print("═══════════════════════════════════════════════════════")
     print(" ✓ Global App Store Connect automated configuration complete!")
     print("═══════════════════════════════════════════════════════")
