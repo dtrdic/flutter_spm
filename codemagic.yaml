@@ -16,7 +16,7 @@ workflows:
         groups:
             - appstore_credentials 
         vars:
-          BUNDLE_ID: com.codemagic.flutterSpm7 
+          BUNDLE_ID: com.codemagic.flutterSpm8 
       triggering:
         events:
           - push

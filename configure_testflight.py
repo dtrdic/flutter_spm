@@ -108,7 +108,7 @@ def main():
     rights_res = requests.patch(f"{BASE_URL}/apps/{app_id}", json={"data": {"id": app_id, "type": "apps", "attributes": {"contentRightsDeclaration": "DOES_NOT_USE_THIRD_PARTY_CONTENT"}}}, headers=headers)
     check_response(rights_res, "Global App Content Rights Update")
     
-    # Global Pricing
+    # Global Pricing Configuration Block
     pts_res = requests.get(f"{BASE_URL}/apps/{app_id}/appPricePoints?filter[territory]=USA&limit=50", headers=headers)
     check_response(pts_res, "Fetching Base Pricing Reference Points")
     free_point_id = next((pt['id'] for pt in pts_res.json().get('data', []) if pt['attributes'].get('customerPrice', '').replace(',', '.') == "0.00"), None)
@@ -117,8 +117,13 @@ def main():
         local_token_id = "${newprice-0}"
         price_payload = {"data": {"type": "appPriceSchedules", "relationships": {"app": {"data": {"type": "apps", "id": app_id}}, "baseTerritory": {"data": {"type": "territories", "id": "USA"}}, "manualPrices": {"data": [{"type": "appPrices", "id": local_token_id}]}}}, "included": [{"type": "appPrices", "id": local_token_id, "attributes": {"startDate": None}, "relationships": {"appPricePoint": {"data": {"type": "appPricePoints", "id": free_point_id}}}}] }
         price_res = requests.post(f"{BASE_URL}/appPriceSchedules", json=price_payload, headers=headers)
-        if price_res.status_code != 409:
+        
+        # 💡 UPDATED LOGGING LOGIC:
+        if price_res.status_code == 409:
+            print("  ✓ Free pricing tier is already active and verified from a previous run.")
+        else:
             check_response(price_res, "Setting Global Pricing Tiers")
+            print("  ✓ App pricing schedule successfully initialized to Free.")
 
     # Beta Review Info Setup
     review_info_res = requests.get(f"{BASE_URL}/apps/{app_id}/betaAppReviewDetail", headers=headers)
