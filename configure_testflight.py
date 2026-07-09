@@ -105,7 +105,8 @@ def main():
 
     # --- 1. GLOBAL SETTINGS BLOCKS ---
     print("── Updating Global Compliance, Pricing and Base Metadata ──")
-    requests.patch(f"{BASE_URL}/apps/{app_id}", json={"data": {"id": app_id, "type": "apps", "attributes": {"contentRightsDeclaration": "DOES_NOT_USE_THIRD_PARTY_CONTENT"}}}, headers=headers)
+    rights_res = requests.patch(f"{BASE_URL}/apps/{app_id}", json={"data": {"id": app_id, "type": "apps", "attributes": {"contentRightsDeclaration": "DOES_NOT_USE_THIRD_PARTY_CONTENT"}}}, headers=headers)
+    check_response(rights_res, "Global App Content Rights Update")
     
     # Global Pricing
     pts_res = requests.get(f"{BASE_URL}/apps/{app_id}/appPricePoints?filter[territory]=USA&limit=50", headers=headers)
@@ -127,8 +128,10 @@ def main():
 
     # Version Compliance (Copyright) & Age Ratings
     requests.patch(f"{BASE_URL}/appStoreVersions/{version_id}", json={"data": {"id": version_id, "type": "appStoreVersions", "attributes": meta['global']['version_attributes']}}, headers=headers)
-    age_res = requests.get(f"{BASE_URL}/appInfos/{info_id}/ageRatingDeclaration", headers=headers)
-    requests.patch(f"{BASE_URL}/ageRatingDeclaration/{age_res.json()['data']['id']}", json={"data": {"id": age_res.json()['data']['id'], "type": "ageRatingDeclarations", "attributes": meta['global']['age_rating']}}, headers=headers)
+    age_res = requests.get(f"{BASE_URL}/apps/{app_id}/appInfos/{info_id}/ageRatingDeclaration", headers=headers) if 'appInfos' not in f"{BASE_URL}/appInfos/{info_id}" else requests.get(f"{BASE_URL}/appInfos/{info_id}/ageRatingDeclaration", headers=headers)
+    if age_res.status_code != 200:
+        age_res = requests.get(f"{BASE_URL}/appInfos/{info_id}/ageRatingDeclaration", headers=headers)
+    requests.patch(f"{BASE_URL}/ageRatingDeclarations/{age_res.json()['data']['id']}", json={"data": {"id": age_res.json()['data']['id'], "type": "ageRatingDeclarations", "attributes": meta['global']['age_rating']}}, headers=headers)
 
     # Primary Category Setup
     requests.patch(f"{BASE_URL}/appInfos/{info_id}", json={"data": {"id": info_id, "type": "appInfos", "relationships": {"primaryCategory": {"data": {"type": "appCategories", "id": meta['global']['categories']['primaryCategory']}}}}}, headers=headers)
@@ -150,7 +153,8 @@ def main():
         
         if v_loc_data:
             v_loc_id = v_loc_data[0]['id']
-            requests.patch(f"{BASE_URL}/appStoreVersionLocalizations/{v_loc_id}", json={"data": {"id": v_loc_id, "type": "appStoreVersionLocalizations", "attributes": v_loc_attributes}}, headers=headers)
+            patch_res = requests.patch(f"{BASE_URL}/appStoreVersionLocalizations/{v_loc_id}", json={"data": {"id": v_loc_id, "type": "appStoreVersionLocalizations", "attributes": v_loc_attributes}}, headers=headers)
+            check_response(patch_res, f"Patching Version Localization text fields for {locale}")
         else:
             v_loc_attributes["locale"] = locale
             v_post = requests.post(f"{BASE_URL}/appStoreVersionLocalizations", json={"data": {"type": "appStoreVersionLocalizations", "attributes": v_loc_attributes, "relationships": {"appStoreVersion": {"data": {"type": "appStoreVersions", "id": version_id}}}}}, headers=headers)
@@ -159,23 +163,41 @@ def main():
 
         # Sync Global App Info Localization (App Name, Subtitle, Privacy URL)
         info_loc_res = requests.get(f"{BASE_URL}/appInfos/{info_id}/appInfoLocalizations?filter[locale]={locale}", headers=headers)
+        check_response(info_loc_res, f"Checking Info Localizations for {locale}")
         info_loc_data = info_loc_res.json().get('data')
+        
         info_attributes = {
             "name": data.get("name"),
             "subtitle": data.get("subtitle"),
             "privacyPolicyUrl": data.get("privacyPolicyUrl")
         }
+        
         if info_loc_data:
-            requests.patch(f"{BASE_URL}/appInfoLocalizations/{info_loc_data[0]['id']}", json={"data": {"id": info_loc_data[0]['id'], "type": "appInfoLocalizations", "attributes": info_attributes}}, headers=headers)
+            info_loc_id = info_loc_data[0]['id']
+            info_res = requests.patch(f"{BASE_URL}/appInfoLocalizations/{info_loc_id}", json={"data": {"id": info_loc_id, "type": "appInfoLocalizations", "attributes": info_attributes}}, headers=headers)
+            
+            # FIXED: If name validation blocks the object update, strip the branding and force save the privacy policy URL route
+            if info_res.status_code == 409:
+                print(f"⚠️ App Name '{data.get('name')}' is locked or already in use. Isolating and force-saving Privacy Policy URL...")
+                fallback_attributes = {"privacyPolicyUrl": data.get("privacyPolicyUrl")}
+                info_res = requests.patch(f"{BASE_URL}/appInfoLocalizations/{info_loc_id}", json={"data": {"id": info_loc_id, "type": "appInfoLocalizations", "attributes": fallback_attributes}}, headers=headers)
+            check_response(info_res, f"Syncing App Info details for {locale}")
         else:
             info_attributes["locale"] = locale
-            requests.post(f"{BASE_URL}/appInfoLocalizations", json={"data": {"type": "appInfoLocalizations", "attributes": info_attributes, "relationships": {"appInfo": {"data": {"type": "appInfos", "id": info_id}}}}}, headers=headers)
+            info_res = requests.post(f"{BASE_URL}/appInfoLocalizations", json={"data": {"type": "appInfoLocalizations", "attributes": info_attributes, "relationships": {"appInfo": {"data": {"type": "appInfos", "id": info_id}}}}}, headers=headers)
+            
+            if info_res.status_code == 409:
+                print(f"⚠️ App Name target taken on creation block. Initializing tracking container via privacy compliance metrics fallback...")
+                fallback_attributes = {"locale": locale, "privacyPolicyUrl": data.get("privacyPolicyUrl")}
+                info_res = requests.post(f"{BASE_URL}/appInfoLocalizations", json={"data": {"type": "appInfoLocalizations", "attributes": fallback_attributes, "relationships": {"appInfo": {"data": {"type": "appInfos", "id": info_id}}}}}, headers=headers)
+            check_response(info_res, f"Creating App Info data fields for {locale}")
 
-        # Sync Multi-Language Screenshots (Reads app-store/screenshots/{locale}/{display_type}/*)
+        # Sync Multi-Language Screenshots
         locale_screenshot_dir = f"app-store/screenshots/{locale}"
         if os.path.exists(locale_screenshot_dir):
             print(f" 📸 Processing screenshot folder patterns for [{locale}]...")
             sets_res = requests.get(f"{BASE_URL}/appStoreVersionLocalizations/{v_loc_id}/appScreenshotSets", headers=headers)
+            check_response(sets_res, f"Reading display screenshot sets for {locale}")
             screenshot_sets = {s['attributes']['screenshotDisplayType']: s['id'] for s in sets_res.json().get('data', [])}
 
             for display_type in os.listdir(locale_screenshot_dir):
@@ -186,11 +208,14 @@ def main():
                 set_id = screenshot_sets.get(display_type)
                 if not set_id:
                     create_set_res = requests.post(f"{BASE_URL}/appScreenshotSets", json={"data": {"type": "appScreenshotSets", "attributes": {"screenshotDisplayType": display_type}, "relationships": {"appStoreVersionLocalization": {"data": {"type": "appStoreVersionLocalizations", "id": v_loc_id}}}}}, headers=headers)
+                    check_response(create_set_res, f"Creating display container for {display_type} ({locale})")
                     set_id = create_set_res.json()['data']['id']
                 else:
                     existing_shots_res = requests.get(f"{BASE_URL}/appScreenshotSets/{set_id}/appScreenshots", headers=headers)
+                    check_response(existing_shots_res, f"Reading screenshots inside container {display_type} ({locale})")
                     for shot in existing_shots_res.json().get('data', []):
-                        requests.delete(f"{BASE_URL}/appScreenshots/{shot['id']}", headers=headers)
+                        del_res = requests.delete(f"{BASE_URL}/appScreenshots/{shot['id']}", headers=headers)
+                        check_response(del_res, f"Clearing old screenshot file {shot['id']}")
 
                 for file_name in sorted(os.listdir(display_path)):
                     if file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
