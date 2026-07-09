@@ -82,245 +82,122 @@ def main():
     with open('app-store/metadata.json') as f:
         meta = json.load(f)
 
-    print("── Fetching App, Version, and Layout Context ──")
+    print("── Fetching Global App Information ──")
     app_res = requests.get(f"{BASE_URL}/apps?filter[bundleId]={BUNDLE_ID}", headers=headers)
     check_response(app_res, "Fetching App ID")
     app_id = app_res.json()['data'][0]['id']
-    primary_locale = app_res.json()['data'][0]['attributes']['primaryLocale']
     
     version_res = requests.get(f"{BASE_URL}/apps/{app_id}/appStoreVersions", headers=headers)
     check_response(version_res, "Fetching App Store Versions Collection")
     versions_data = version_res.json().get('data', [])
     
     EDITABLE_STATES = ['PREPARE_FOR_SUBMISSION', 'DEVELOPER_REJECTED', 'REJECTED']
-    
-    target_version = None
-    for v in versions_data:
-        if v['attributes']['appStoreState'] in EDITABLE_STATES:
-            target_version = v
-            break
+    target_version = next((v for v in versions_data if v['attributes']['appStoreState'] in EDITABLE_STATES), None)
             
     if not target_version:
-        current_states = [v['attributes']['appStoreState'] for v in versions_data]
-        print(f"ℹ No version found in editable states: {EDITABLE_STATES}")
-        print(f"ℹ Live database version states: {current_states}")
-        print("✓ Version is locked in review. Skipping update orchestration.")
-        print("═══════════════════════════════════════════════════════")
-        print(" ✓ Global App Store Connect automated configuration complete! (Skipped)")
-        print("═══════════════════════════════════════════════════════")
+        print("ℹ No editable version found. Skipping update orchestration.")
         sys.exit(0)
         
     version_id = target_version['id']
     info_res = requests.get(f"{BASE_URL}/apps/{app_id}/appInfos", headers=headers)
     check_response(info_res, "Fetching App Info Collection")
     info_id = info_res.json()['data'][0]['id']
+
+    # --- 1. GLOBAL SETTINGS BLOCKS ---
+    print("── Updating Global Compliance, Pricing and Base Metadata ──")
+    requests.patch(f"{BASE_URL}/apps/{app_id}", json={"data": {"id": app_id, "type": "apps", "attributes": {"contentRightsDeclaration": "DOES_NOT_USE_THIRD_PARTY_CONTENT"}}}, headers=headers)
     
-    print(f"✓ Target Version ID: {version_id} (State: {target_version['attributes']['appStoreState']})")
-    print(f"✓ Target App Info ID: {info_id} (Locale: {primary_locale})")
-
-    # 1. Declaring App Content Rights
-    print("── Declaring App Content Rights ──")
-    rights_payload = {
-        "data": {
-            "id": app_id,
-            "type": "apps",
-            "attributes": {
-                "contentRightsDeclaration": "DOES_NOT_USE_THIRD_PARTY_CONTENT"
-            }
-        }
-    }
-    rights_patch = requests.patch(f"{BASE_URL}/apps/{app_id}", json=rights_payload, headers=headers)
-    check_response(rights_patch, "Updating Content Rights Declaration")
-    print("✓ Content Rights declared: Does not use third-party content.")
-
-    # 2. Create/Update Pricing Schedule (FIXED: Standardized Apple relationship token layout)
-    print("── Configuring Price Schedule Container ──")
+    # Global Pricing
     pts_res = requests.get(f"{BASE_URL}/apps/{app_id}/appPricePoints?filter[territory]=USA&limit=50", headers=headers)
-    check_response(pts_res, "Fetching Territory App Price Points")
-    free_point_id = None
-    for pt in pts_res.json().get('data', []):
-        price_str = pt['attributes'].get('customerPrice', '').replace(',', '.')
-        try:
-            if float(price_str) == 0.0:
-                free_point_id = pt['id']
-                break
-        except ValueError:
-            pass
-
+    free_point_id = next((pt['id'] for pt in pts_res.json().get('data', []) if pt['attributes'].get('customerPrice', '').replace(',', '.') == "0.00"), None)
     if free_point_id:
-        local_token_id = "${newprice-0}"  # 👈 MUST match Apple's expected syntax pattern
-        price_payload = {
-            "data": {
-                "type": "appPriceSchedules",
-                "relationships": {
-                    "app": {"data": {"type": "apps", "id": app_id}},
-                    "baseTerritory": {"data": {"type": "territories", "id": "USA"}},
-                    "manualPrices": {"data": [{"type": "appPrices", "id": local_token_id}]}
-                }
-            },
-            "included": [
-                {
-                    "type": "appPrices",
-                    "id": local_token_id,
-                    "attributes": {"startDate": None},
-                    "relationships": {
-                        "appPricePoint": {"data": {"type": "appPricePoints", "id": free_point_id}}
-                    }
-                }
-            ]
-        }
-        price_res = requests.post(f"{BASE_URL}/appPriceSchedules", json=price_payload, headers=headers)
-        if price_res.status_code == 409:
-            print(f"ℹ Container notice (409). Raw payload state context: {price_res.text}")
-        else:
-            check_response(price_res, "Initializing App Price Schedule")
-            print("✓ App pricing schedule successfully initialized to Free.")
-    else:
-        print("✗ Could not locate a valid Free (0.00) price point tier using base territory schema.")
-        sys.exit(1)
+        local_token_id = "${newprice-0}"
+        price_payload = {"data": {"type": "appPriceSchedules", "relationships": {"app": {"data": {"type": "apps", "id": app_id}}, "baseTerritory": {"data": {"type": "territories", "id": "USA"}}, "manualPrices": {"data": [{"type": "appPrices", "id": local_token_id}]}}}, "included": [{"type": "appPrices", "id": local_token_id, "attributes": {"startDate": None}, "relationships": {"appPricePoint": {"data": {"type": "appPricePoints", "id": free_point_id}}}}] }
+        requests.post(f"{BASE_URL}/appPriceSchedules", json=price_payload, headers=headers)
 
-    # 3. TestFlight Beta Settings Updates
-    print("── Updating Beta App Review Information ──")
+    # Beta Detail & Production Reviews
     review_info_res = requests.get(f"{BASE_URL}/apps/{app_id}/betaAppReviewDetail", headers=headers)
-    check_response(review_info_res, "Fetching Beta Review Detail ID")
-    review_detail_id = review_info_res.json()['data']['id']
-
-    review_payload = {
-        "data": {"id": review_detail_id, "type": "betaAppReviewDetails", "attributes": meta['beta_review_info']}
-    }
-    patch_review = requests.patch(f"{BASE_URL}/betaAppReviewDetails/{review_detail_id}", json=review_payload, headers=headers)
-    check_response(patch_review, "Patching Beta App Review Details")
-
-    print(f"── Updating TestFlight Feedback Email for locale: {primary_locale} ──")
-    beta_loc_res = requests.get(f"{BASE_URL}/betaAppLocalizations?filter[app]={app_id}&filter[locale]={primary_locale}", headers=headers)
-    check_response(beta_loc_res, "Checking existing Beta Localizations")
-    beta_loc_data = beta_loc_res.json().get('data')
-    beta_attributes = meta['beta_localization'].copy()
-
-    if beta_loc_data:
-        requests.patch(f"{BASE_URL}/betaAppLocalizations/{beta_loc_data[0]['id']}", json={"data": {"id": beta_loc_data[0]['id'], "type": "betaAppLocalizations", "attributes": beta_attributes}}, headers=headers)
-    else:
-        beta_attributes['locale'] = primary_locale
-        requests.post(f"{BASE_URL}/betaAppLocalizations", json={"data": {"type": "betaAppLocalizations", "attributes": beta_attributes, "relationships": {"app": {"data": {"type": "apps", "id": app_id}}}}}, headers=headers)
-
-    # 4. Create or Update Production App Store Review Details
-    print("── Configuring Production App Store Review Info ──")
+    requests.patch(f"{BASE_URL}/betaAppReviewDetails/{review_info_res.json()['data']['id']}", json={"data": {"id": review_info_res.json()['data']['id'], "type": "betaAppReviewDetails", "attributes": meta['global']['beta_review_info']}}, headers=headers)
+    
     prod_review_res = requests.get(f"{BASE_URL}/appStoreVersions/{version_id}/appStoreReviewDetail", headers=headers)
-    
-    prod_review_payload = {
-        "data": {
-            "type": "appStoreReviewDetails",
-            "attributes": meta['production_review_info']
-        }
-    }
-    
     if prod_review_res.status_code == 200 and prod_review_res.json().get('data'):
-        prod_review_id = prod_review_res.json()['data']['id']
-        prod_review_payload["data"]["id"] = prod_review_id
-        requests.patch(f"{BASE_URL}/appStoreReviewDetails/{prod_review_id}", json=prod_review_payload, headers=headers)
+        requests.patch(f"{BASE_URL}/appStoreReviewDetails/{prod_review_res.json()['data']['id']}", json={"data": {"id": prod_review_res.json()['data']['id'], "type": "appStoreReviewDetails", "attributes": meta['global']['production_review_info']}}, headers=headers)
     else:
-        prod_review_payload["data"]["relationships"] = {"appStoreVersion": {"data": {"type": "appStoreVersions", "id": version_id}}}
-        requests.post(f"{BASE_URL}/appStoreReviewDetails", json=prod_review_payload, headers=headers)
-    print("✓ Production App Review contact fields saved.")
+        requests.post(f"{BASE_URL}/appStoreReviewDetails", json={"data": {"type": "appStoreReviewDetails", "attributes": meta['global']['production_review_info'], "relationships": {"appStoreVersion": {"data": {"type": "appStoreVersions", "id": version_id}}}}}, headers=headers)
 
-    # 5. App Store Version Attributes (Copyright)
-    print("── Updating App Store Version Compliance and Copyright ──")
-    version_payload = {
-        "data": {"id": version_id, "type": "appStoreVersions", "attributes": meta['version_attributes']}
-    }
-    v_patch = requests.patch(f"{BASE_URL}/appStoreVersions/{version_id}", json=version_payload, headers=headers)
-    check_response(v_patch, "Updating Version Attributes")
-
-    # 6. Age Rating Questionnaire Configuration
-    print("── Configuring Age Rating Declarations ──")
+    # Version Compliance (Copyright) & Age Ratings
+    requests.patch(f"{BASE_URL}/appStoreVersions/{version_id}", json={"data": {"id": version_id, "type": "appStoreVersions", "attributes": meta['global']['version_attributes']}}, headers=headers)
     age_res = requests.get(f"{BASE_URL}/appInfos/{info_id}/ageRatingDeclaration", headers=headers)
-    check_response(age_res, "Fetching Age Rating Declaration ID")
-    age_id = age_res.json()['data']['id']
-    
-    age_payload = {
-        "data": {"id": age_id, "type": "ageRatingDeclarations", "attributes": meta['age_rating']}
-    }
-    age_patch = requests.patch(f"{BASE_URL}/ageRatingDeclarations/{age_id}", json=age_payload, headers=headers)
-    check_response(age_patch, "Patching Age Rating Declaration")
+    requests.patch(f"{BASE_URL}/ageRatingDeclaration/{age_res.json()['data']['id']}", json={"data": {"id": age_res.json()['data']['id'], "type": "ageRatingDeclarations", "attributes": meta['global']['age_rating']}}, headers=headers)
 
-    # 7. Storefront Localized Text & Marketing URLs
-    print("── Syncing Localized Storefront Text & URLs ──")
-    store_loc_res = requests.get(f"{BASE_URL}/appStoreVersions/{version_id}/appStoreVersionLocalizations?filter[locale]={primary_locale}", headers=headers)
-    check_response(store_loc_res, "Fetching Localization ID")
-    localization_id = store_loc_res.json()['data'][0]['id']
+    # Primary Category Setup
+    requests.patch(f"{BASE_URL}/appInfos/{info_id}", json={"data": {"id": info_id, "type": "appInfos", "relationships": {"primaryCategory": {"data": {"type": "appCategories", "id": meta['global']['categories']['primaryCategory']}}}}}, headers=headers)
 
-    loc_payload = {
-        "data": {"id": localization_id, "type": "appStoreVersionLocalizations", "attributes": meta['store_localization']}
-    }
-    loc_patch = requests.patch(f"{BASE_URL}/appStoreVersionLocalizations/{localization_id}", json=loc_payload, headers=headers)
-    check_response(loc_patch, "Patching Storefront Localization")
+    # --- 2. DYNAMIC MULTI-LANGUAGE ORCHESTRATION LOOP ---
+    for locale, data in meta['localizations'].items():
+        print(f"\n🌍 Processing Localization Loop for Target Locale: [{locale}] ──")
 
-    # 8. Sync App Info Localizations
-    print(f"── Syncing Global App Privacy Policy URL for locale: {primary_locale} ──")
-    info_loc_res = requests.get(f"{BASE_URL}/appInfos/{info_id}/appInfoLocalizations?filter[locale]={primary_locale}", headers=headers)
-    check_response(info_loc_res, "Checking existing App Info Localizations")
-    info_loc_data = info_loc_res.json().get('data')
-    info_loc_attributes = meta['app_info_localization'].copy()
-
-    if info_loc_data:
-        info_loc_id = info_loc_data[0]['id']
-        requests.patch(f"{BASE_URL}/appInfoLocalizations/{info_loc_id}", json={"data": {"id": info_loc_id, "type": "appInfoLocalizations", "attributes": info_loc_attributes}}, headers=headers)
-    else:
-        info_loc_attributes['locale'] = primary_locale
-        requests.post(f"{BASE_URL}/appInfoLocalizations", json={"data": {"type": "appInfoLocalizations", "attributes": info_loc_attributes, "relationships": {"appInfo": {"data": {"type": "appInfos", "id": info_id}}}}}, headers=headers)
-
-    # 9. App Info and Store Categories
-    print("── Setting Store Categories ──")
-    category_id = meta['categories']['primaryCategory']
-    info_payload = {
-        "data": {
-            "id": info_id,
-            "type": "appInfos",
-            "attributes": meta['app_info_attributes'],
-            "relationships": {"primaryCategory": {"data": {"type": "appCategories", "id": category_id}}}
-        }
-    }
-    info_patch = requests.patch(f"{BASE_URL}/appInfos/{info_id}", json=info_payload, headers=headers)
-    check_response(info_patch, "Patching Categories and App Info")
-
-    # 10. Screenshot Orchestration
-    base_screenshots_dir = "app-store/screenshots"
-    if os.path.exists(base_screenshots_dir):
-        print("── Orchestrating App Store Screenshot Uploads ──")
-        sets_res = requests.get(f"{BASE_URL}/appStoreVersionLocalizations/{localization_id}/appScreenshotSets", headers=headers)
-        check_response(sets_res, "Fetching Existing Screenshot Sets")
+        # Sync App Store Version Localization (Description, Keywords, Support URL)
+        v_loc_res = requests.get(f"{BASE_URL}/appStoreVersions/{version_id}/appStoreVersionLocalizations?filter[locale]={locale}", headers=headers)
+        check_response(v_loc_res, f"Fetching Version Localization for {locale}")
+        v_loc_data = v_loc_res.json().get('data')
         
-        screenshot_sets = {s['attributes']['screenshotDisplayType']: s['id'] for s in sets_res.json().get('data', [])}
+        v_loc_attributes = {
+            "description": data.get("description"),
+            "keywords": data.get("keywords"),
+            "supportUrl": data.get("supportUrl")
+        }
+        
+        if v_loc_data:
+            v_loc_id = v_loc_data[0]['id']
+            requests.patch(f"{BASE_URL}/appStoreVersionLocalizations/{v_loc_id}", json={"data": {"id": v_loc_id, "type": "appStoreVersionLocalizations", "attributes": v_loc_attributes}}, headers=headers)
+        else:
+            v_loc_attributes["locale"] = locale
+            v_post = requests.post(f"{BASE_URL}/appStoreVersionLocalizations", json={"data": {"type": "appStoreVersionLocalizations", "attributes": v_loc_attributes, "relationships": {"appStoreVersion": {"data": {"type": "appStoreVersions", "id": version_id}}}}}, headers=headers)
+            check_response(v_post, f"Creating baseline Version Localization container for {locale}")
+            v_loc_id = v_post.json()['data']['id']
 
-        for display_type in os.listdir(base_screenshots_dir):
-            display_path = os.path.join(base_screenshots_dir, display_type)
-            if not os.path.isdir(display_path) or display_type not in ['APP_IPHONE_65', 'APP_IPHONE_67', 'APP_IPAD_PRO_3GEN_129']:
-                continue
+        # Sync Global App Info Localization (App Name, Subtitle, Privacy URL)
+        info_loc_res = requests.get(f"{BASE_URL}/appInfos/{info_id}/appInfoLocalizations?filter[locale]={locale}", headers=headers)
+        info_loc_data = info_loc_res.json().get('data')
+        info_attributes = {
+            "name": data.get("name"),
+            "subtitle": data.get("subtitle"),
+            "privacyPolicyUrl": data.get("privacyPolicyUrl")
+        }
+        if info_loc_data:
+            requests.patch(f"{BASE_URL}/appInfoLocalizations/{info_loc_data[0]['id']}", json={"data": {"id": info_loc_data[0]['id'], "type": "appInfoLocalizations", "attributes": info_attributes}}, headers=headers)
+        else:
+            info_attributes["locale"] = locale
+            requests.post(f"{BASE_URL}/appInfoLocalizations", json={"data": {"type": "appInfoLocalizations", "attributes": info_attributes, "relationships": {"appInfo": {"data": {"type": "appInfos", "id": info_id}}}}}, headers=headers)
 
-            set_id = screenshot_sets.get(display_type)
-            if not set_id:
-                print(f"  Initializing missing set slot for {display_type}...")
-                create_set_res = requests.post(f"{BASE_URL}/appScreenshotSets", json={"data": {"type": "appScreenshotSets", "attributes": {"screenshotDisplayType": display_type}, "relationships": {"appStoreVersionLocalization": {"data": {"type": "appStoreVersionLocalizations", "id": localization_id}}}}}, headers=headers)
-                check_response(create_set_res, f"Creating set container for {display_type}")
-                set_id = create_set_res.json()['data']['id']
-            else:
-                print(f"  Cleaning historical assets from existing slot: {display_type}...")
-                existing_shots_res = requests.get(f"{BASE_URL}/appScreenshotSets/{set_id}/appScreenshots", headers=headers)
-                check_response(existing_shots_res, f"Reading existing images in set {display_type}")
-                for shot in existing_shots_res.json().get('data', []):
-                    shot_id = shot['id']
-                    del_res = requests.delete(f"{BASE_URL}/appScreenshots/{shot_id}", headers=headers)
-                    check_response(del_res, f"Removing duplicate screenshot asset {shot_id}")
+        # Sync Multi-Language Screenshots (Reads app-store/screenshots/{locale}/{display_type}/*)
+        locale_screenshot_dir = f"app-store/screenshots/{locale}"
+        if os.path.exists(locale_screenshot_dir):
+            print(f" 📸 Processing screenshot folder patterns for [{locale}]...")
+            sets_res = requests.get(f"{BASE_URL}/appStoreVersionLocalizations/{v_loc_id}/appScreenshotSets", headers=headers)
+            screenshot_sets = {s['attributes']['screenshotDisplayType']: s['id'] for s in sets_res.json().get('data', [])}
 
-            print(f" Processing folder: {display_type}")
-            for file_name in sorted(os.listdir(display_path)):
-                if file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
-                    upload_screenshot_file(os.path.join(display_path, file_name), set_id, headers)
+            for display_type in os.listdir(locale_screenshot_dir):
+                display_path = os.path.join(locale_screenshot_dir, display_type)
+                if not os.path.isdir(display_path) or display_type not in ['APP_IPHONE_65', 'APP_IPHONE_67', 'APP_IPAD_PRO_3GEN_129']:
+                    continue
 
-    print("── Pausing for a 45-second cooling period ──")
-    print("ℹ Allowing Apple to finish image scaling and release resource locks...")
+                set_id = screenshot_sets.get(display_type)
+                if not set_id:
+                    create_set_res = requests.post(f"{BASE_URL}/appScreenshotSets", json={"data": {"type": "appScreenshotSets", "attributes": {"screenshotDisplayType": display_type}, "relationships": {"appStoreVersionLocalization": {"data": {"type": "appStoreVersionLocalizations", "id": v_loc_id}}}}}, headers=headers)
+                    set_id = create_set_res.json()['data']['id']
+                else:
+                    existing_shots_res = requests.get(f"{BASE_URL}/appScreenshotSets/{set_id}/appScreenshots", headers=headers)
+                    for shot in existing_shots_res.json().get('data', []):
+                        requests.delete(f"{BASE_URL}/appScreenshots/{shot['id']}", headers=headers)
+
+                for file_name in sorted(os.listdir(display_path)):
+                    if file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                        upload_screenshot_file(os.path.join(display_path, file_name), set_id, headers)
+
+    print("\n── Pausing for a 45-second cooling period ──")
     time.sleep(45)
-
     print("═══════════════════════════════════════════════════════")
     print(" ✓ Global App Store Connect automated configuration complete!")
     print("═══════════════════════════════════════════════════════")
